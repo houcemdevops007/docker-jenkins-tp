@@ -1,0 +1,40 @@
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                sh 'docker build -t demo-app:${BUILD_NUMBER} .'
+            }
+        }
+
+        stage('Deploy via SSH') {
+            steps {
+                sshPublisher(
+                    publishers: [
+                        sshPublisherDesc(
+                            configName: 'docker-prod',
+                            transfers: [
+                                sshTransfer(
+                                    execCommand: "docker stop demo-app || true; " +
+                                                 "docker rm demo-app || true; " +
+                                                 "docker run -d --name demo-app " +
+                                                 "--restart unless-stopped -p 8080:8080 " +
+                                                 "demo-app:${BUILD_NUMBER}"
+                                )
+                            ]
+                        )
+                    ]
+                )
+            }
+        }
+
+    }
+}

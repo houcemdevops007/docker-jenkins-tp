@@ -1,0 +1,37 @@
+pipeline {
+
+    agent { label 'docker-agent' }
+
+    environment {
+        IMAGE_NAME   = "demo-app"
+        IMAGE_TAG    = "${env.BUILD_NUMBER}"
+        PREVIOUS_TAG = "${env.BUILD_NUMBER.toInteger() - 1}"
+        DEPLOY_HOST  = "192.168.1.20"
+    }
+
+    stages {
+        // ... Checkout, Tests, Docker Build, Scan, Push Registry, Deploy : inchangés ...
+
+        stage('Health Check') {
+            steps {
+                sh "curl -f http://${DEPLOY_HOST}:8080/health"
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo "Health Check en échec pour ${env.IMAGE_NAME}:${env.IMAGE_TAG} -> rollback vers ${env.IMAGE_NAME}:${env.PREVIOUS_TAG}"
+            withCredentials([sshUserPrivateKey(credentialsId: 'docker-deploy-ssh', keyFileVariable: 'SSH_KEY')]) {
+                sh '''
+                    ssh -i $SSH_KEY -o StrictHostKeyChecking=no jenkins-deploy@${DEPLOY_HOST} "
+                        docker stop ${IMAGE_NAME} || true &&
+                        docker rm ${IMAGE_NAME} || true &&
+                        docker run -d --name ${IMAGE_NAME} --restart unless-stopped -p 8080:8080 \
+                            ${IMAGE_NAME}:${PREVIOUS_TAG}
+                    "
+                '''
+            }
+        }
+    }
+}

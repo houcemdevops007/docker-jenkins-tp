@@ -1,0 +1,77 @@
+pipeline {
+
+    agent { label 'docker-agent' }
+
+    environment {
+        IMAGE_NAME   = "demo-app"
+        REGISTRY_URL = "https://registry.example.com"
+        IMAGE_TAG    = "${env.BUILD_NUMBER}"
+        DEPLOY_HOST  = "192.168.1.20"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps { checkout scm }
+        }
+
+        stage('Tests') {
+            steps {
+                sh 'pip install -r app/requirements.txt'
+                sh 'python -m py_compile app/app.py'
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script { docker.build("${env.IMAGE_NAME}:${env.IMAGE_TAG}") }
+            }
+        }
+
+        stage('Scan') {
+            steps {
+                sh "trivy image --exit-code 1 --severity HIGH,CRITICAL ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('Push Registry') {
+            steps {
+                script {
+                    docker.withRegistry(env.REGISTRY_URL, 'docker-registry-credentials') {
+                        docker.image("${env.IMAGE_NAME}:${env.IMAGE_TAG}").push()
+                    }
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sshPublisher(
+                    publishers: [
+                        sshPublisherDesc(
+                            configName: 'docker-prod',
+                            transfers: [
+                                sshTransfer(
+                                    execCommand: "docker pull registry.example.com/${IMAGE_NAME}:${IMAGE_TAG} && " +
+                                                 "docker stop ${IMAGE_NAME} || true; " +
+                                                 "docker rm ${IMAGE_NAME} || true; " +
+                                                 "docker run -d --name ${IMAGE_NAME} " +
+                                                 "--restart unless-stopped -p 8080:8080 " +
+                                                 "registry.example.com/${IMAGE_NAME}:${IMAGE_TAG}"
+                                )
+                            ]
+                        )
+                    ]
+                )
+            }
+        }
+
+
+        stage('Health Check') {
+            steps {
+                sh "curl -f http://${DEPLOY_HOST}:8080/health"
+            }
+        }
+
+    }
+}
